@@ -1,8 +1,6 @@
 """保存/重设按钮。"""
 import logging
-
 from homeassistant.components.button import ButtonEntity
-
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -51,9 +49,7 @@ class LeediSaveSlotButton(ButtonEntity):
         prof = self._prof()
         if prof is None:
             return
-
         slot = prof.get_slot_index()
-
         # 预设模式：提示不能直接保存
         if slot < 0:
             await _notify(
@@ -72,18 +68,17 @@ class LeediSaveSlotButton(ButtonEntity):
             )
             _LOGGER.info("预设模式，拒绝保存")
             return
-
         # 自定义模式：正常保存
         snapshot = prof.snapshot_state()
         slot_num = slot + 1
         new_options = dict(self._entry.options)
         for ch in ("r", "g", "b", "w", "uv"):
             new_options[f"custom_{slot_num}_{ch}"] = snapshot[ch]
-        self.hass.config_entries.async_update_entry(
+        # ✅修复：增加 await
+        await self.hass.config_entries.async_update_entry(
             self._entry, options=new_options
         )
         _LOGGER.info("已保存到自定义槽 %d: %s", slot_num, snapshot)
-
         await _notify(
             self.hass,
             title="已保存",
@@ -119,9 +114,7 @@ class LeediRevertButton(ButtonEntity):
         )
         if prof is None:
             return
-
         slot = prof.get_slot_index()
-
         # 自定义模式：重读 options 里的槽值
         if slot >= 0:
             prof.restore_from_options()
@@ -134,7 +127,6 @@ class LeediRevertButton(ButtonEntity):
                 nid=f"leedi_revert_ok_{self._entry.entry_id}",
             )
             return
-
         # 预设模式：重新按 options 里的功率计算
         await prof._recompute_and_apply()
         _LOGGER.info("预设模式已重设到配置功率")

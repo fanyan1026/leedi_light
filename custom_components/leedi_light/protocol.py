@@ -1,9 +1,7 @@
 import struct
-
 HEADER = bytes([0x34, 0x43, 0x88, 0x88])
 NOTIFY_HW = "4334888801"
 NOTIFY_STATUS = "4334888802"
-
 
 def modbus_crc16(data: bytes) -> int:
     crc = 0xFFFF
@@ -16,16 +14,13 @@ def modbus_crc16(data: bytes) -> int:
                 crc >>= 1
     return crc
 
-
 def build_command(cmd: int, data: bytes = b"") -> bytes:
     payload = HEADER + bytes([cmd]) + struct.pack(">H", len(data)) + data
     crc = modbus_crc16(payload)
     return payload + struct.pack(">H", crc)
 
-
 def parse_notify(hex_str: str):
     """解析设备通知帧。
-
     - HW 帧:  43348888 01 <len> <series><ntc><hw3><fw3> <crc>
     - 状态帧: 43348888 02 <len> <r><g><b><w><uv>[<temp>[<gear>]] <crc>
       UV=0xFE 为固件"不上报 UV"标记，非真实亮度
@@ -50,16 +45,12 @@ def parse_notify(hex_str: str):
             b = int(light_hex[4:6], 16)
             w = int(light_hex[6:8], 16)
             uv_raw = int(light_hex[8:10], 16)
-
             result.update(r=r, g=g, b=b, w=w)
-
             # UV：0xFE 表示"固件不上报 UV"，调用方应保留本地值
             result["uv_valid"] = (uv_raw != 0xFE)
             result["uv"] = uv_raw if uv_raw != 0xFE else 0
-
             # 关灯判定：R/G/B/W 全 0 才算关，忽略 UV
             result["is_on"] = not (r == 0 and g == 0 and b == 0 and w == 0)
-
             if data_len >= 6:
                 result["temp"] = int(hex_str[24:26], 16)
             if data_len >= 7:
@@ -67,7 +58,6 @@ def parse_notify(hex_str: str):
         except Exception:
             pass
     return result
-
 
 def _parse_version(hex_part: str) -> str:
     if len(hex_part) != 6:

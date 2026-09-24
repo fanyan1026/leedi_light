@@ -1,20 +1,16 @@
 import logging
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-
 from .ble_client import LeediBleClient
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
-
 PLATFORMS = ["switch", "select", "number", "sensor", "fan", "button"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     address = entry.data["address"]
     client = LeediBleClient(hass, address)
-
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = client
     hass.data[DOMAIN][f"{entry.entry_id}_channel_state"] = {
@@ -23,15 +19,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     hass.data[DOMAIN][f"{entry.entry_id}_channel_entities"] = []
     hass.data[DOMAIN][f"{entry.entry_id}_profile_entity"] = None
     hass.data[DOMAIN][f"{entry.entry_id}_fan_entity"] = None
-
+    hass.data[DOMAIN][f"{entry.entry_id}_main_switch"] = None
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
     await client.start()
-
+    # 启动后立即刷新状态（延迟 3 秒等 HA 完全就绪）
+    hass.async_create_task(client.poll_now())
     entry.async_on_unload(entry.add_update_listener(_options_updated))
-
     hass.async_create_task(_apply_timers_from_options(hass, entry))
-
     return True
 
 
@@ -82,7 +76,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         client = hass.data[DOMAIN].pop(entry.entry_id, None)
-        for key in ("channel_state", "channel_entities", "profile_entity", "fan_entity"):
+        for key in ("channel_state", "channel_entities", "profile_entity",
+                    "fan_entity", "main_switch"):
             hass.data[DOMAIN].pop(f"{entry.entry_id}_{key}", None)
         if client is not None:
             await client.stop()

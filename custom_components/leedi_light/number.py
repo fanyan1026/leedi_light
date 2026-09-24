@@ -1,9 +1,14 @@
 import logging
+import time
+
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.helpers.restore_state import RestoreEntity
+
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+
+CMD_COOLDOWN = 2.0
 
 CHANNEL_MAP = [
     {"key": "r",  "trans_key": "channel_r"},
@@ -33,8 +38,8 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 class LeediChannelNumber(NumberEntity):
     """5 路通道滑块。
 
-    - 灯开：显示设备真实值，可拖，下发立即生效
-    - 灯关：显示上次设置值，也可拖，下发后设备存着，下次开灯用
+    - 灯开：拖动 → 立即下发；notify 跟设备（2 秒冷却）
+    - 灯关：拖动 → 只改本地预览，不下发
     """
     _attr_has_entity_name = True
     _attr_native_min_value = 0
@@ -53,7 +58,7 @@ class LeediChannelNumber(NumberEntity):
         self._attr_unique_id = f"{entry.entry_id}_ch_{ch_key}"
         self._attr_native_value = 0
         self._attr_available = True
-        self._light_on = False
+        self._last_cmd_time = 0.0
         self._attr_device_info = {"identifiers": {(DOMAIN, entry.entry_id)}}
         client.set_notify_callback(self._handle_notify)
         client.set_disconnect_callback(self._handle_disconnect)
@@ -71,26 +76,32 @@ class LeediChannelNumber(NumberEntity):
             self._attr_available = False
             self.async_write_ha_state()
 
+    def _is_light_on(self) -> bool:
+        sw = self.hass.data[DOMAIN].get(f"{self._entry.entry_id}_main_switch")
+        return bool(sw and sw._attr_is_on)
+
     def _handle_notify(self, data: dict):
         if data.get("type") != "status":
             return
         self._attr_available = True
 
-        light_on = bool(data.get("is_on", False))
-        self._light_on = light_on
-
-        # 灯关闭：保留滑块显示的"设置值"不变
-        # 理由：灯关时设备会上报 RGBW=0，如果覆盖用户就看不到自己设的值
-        if not light_on:
+        # UV 设备不上报，保留本地值
+        if self._ch_key == "uv":
             self.async_write_ha_state()
             return
 
-        # 灯开启：从设备读真实值
-        if self._ch_key == "uv":
-            new_val = self._state.get("uv", 0)   # UV 设备不报，用本地值
-        else:
-            new_val = data.get(self._ch_key, 0)
+        # 灯关 → 保留本地预览
+        if not self._is_light_on():
+            self.async_write_ha_state()
+            return
 
+        # 命令后 2 秒内不覆盖（防闪回）
+        if time.time() - self._last_cmd_time < CMD_COOLDOWN:
+            self.async_write_ha_state()
+            return
+
+        # 灯开 → 跟设备真实值
+        new_val = data.get(self._ch_key, 0)
         if self._attr_native_value != new_val:
             self._attr_native_value = new_val
             self._state[self._ch_key] = new_val
@@ -98,12 +109,21 @@ class LeediChannelNumber(NumberEntity):
 
     async def async_set_native_value(self, value: float):
         val = int(value)
+        prev_val = self._attr_native_value
+        prev_state = self._state.get(self._ch_key, 0)
+
+        # 乐观更新 UI
         self._attr_native_value = val
         self._state[self._ch_key] = val
+        self.async_write_ha_state()
 
-        # 不论灯开关，都下发 CMD=3
-        # 灯开 → 立即生效
-        # 灯关 → 设备存着，下次开灯用
+        # 灯关 → 只改本地，不下发
+        if not self._is_light_on():
+            _LOGGER.debug("灯关闭，通道 %s = %d 暂存（下次开灯生效）",
+                          self._ch_key, val)
+            return
+
+        # 灯开 → 实时下发
         r = self._state.get("r", 0)
         g = self._state.get("g", 0)
         b = self._state.get("b", 0)
@@ -112,9 +132,12 @@ class LeediChannelNumber(NumberEntity):
         try:
             await self._client.set_brightness(r, g, b, w, uv)
             self._attr_available = True
+            self._last_cmd_time = time.time()
         except Exception as e:
-            _LOGGER.warning("下发通道 %s 失败: %s", self._ch_key, e)
-            self._attr_available = False
+            _LOGGER.warning("下发通道 %s 失败，回滚: %s", self._ch_key, e)
+            self._attr_native_value = prev_val
+            self._state[self._ch_key] = prev_state
+            self._attr_available = True
         self.async_write_ha_state()
 
 
@@ -155,12 +178,16 @@ class LeediFanTempThresholdNumber(NumberEntity, RestoreEntity):
         fan_ent = self.hass.data[DOMAIN].get(
             f"{self._entry.entry_id}_fan_entity"
         )
-        gear = 0
-        if fan_ent is not None:
-            gear = {None: 0, "off": 0, "low": 1, "high": 2}.get(
-                fan_ent.preset_mode, 0
-            )
-            fan_ent._temp_threshold = temp
+        if fan_ent is None:
+            return
+
+        old_temp = fan_ent._temp_threshold
+        fan_ent._temp_threshold = temp
+
+        if fan_ent.is_on:
+            gear = {"low": 1, "high": 2}[fan_ent.preset_mode]
+        else:
+            gear = 0
 
         try:
             await self._client.set_fan(temp, gear)
@@ -170,5 +197,6 @@ class LeediFanTempThresholdNumber(NumberEntity, RestoreEntity):
                 fan_ent.async_write_ha_state()
         except Exception as e:
             _LOGGER.warning("设置风扇温度阈值失败: %s", e)
-            self._attr_available = False
+            fan_ent._temp_threshold = old_temp
+            self._attr_available = True
         self.async_write_ha_state()

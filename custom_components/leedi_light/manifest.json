@@ -1,7 +1,7 @@
 {
   "domain": "leedi_light",
   "name": "LEDI",
-  "version": "0.10.0",
+  "version": "0.10.2",
   "documentation": "https://github.com/fanyan1026/leedi_light",
   "issue_tracker": "https://github.com/fanyan1026/leedi_light/issues",
   "codeowners": ["@fanyan1026"],

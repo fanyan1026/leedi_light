@@ -1,6 +1,8 @@
 import logging
+
 from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
 from homeassistant.const import UnitOfPower
+
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -42,20 +44,23 @@ class LeediEstPowerSensor(SensorEntity):
             self._attr_available = False
             self.async_write_ha_state()
 
+    def _is_light_on(self) -> bool:
+        sw = self.hass.data[DOMAIN].get(f"{self._entry.entry_id}_main_switch")
+        return bool(sw and sw._attr_is_on)
+
     def _handle_notify(self, data: dict):
         if data.get("type") != "status":
             return
-
-        # 无条件恢复 available
         self._attr_available = True
 
-        # 灯关闭 → 功率 0
-        if not data.get("is_on", False):
-            self._attr_native_value = 0.0
-            self.async_write_ha_state()
+        # 灯关 → 0W
+        if not self._is_light_on():
+            if self._attr_native_value != 0.0:
+                self._attr_native_value = 0.0
+                self.async_write_ha_state()
             return
 
-        # 灯开启 → 4 路用设备真实值 + UV 用本地设定值
+        # 灯开 → 用 5 路实际值（RGBW 从设备，UV 从本地）
         r = data.get("r", 0)
         g = data.get("g", 0)
         b = data.get("b", 0)
@@ -65,5 +70,6 @@ class LeediEstPowerSensor(SensorEntity):
         total = r + g + b + w + uv
         est = round(80.0 * total / 500.0, 1)
 
-        self._attr_native_value = est
-        self.async_write_ha_state()
+        if self._attr_native_value != est:
+            self._attr_native_value = est
+            self.async_write_ha_state()
