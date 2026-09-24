@@ -1,0 +1,61 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Select device",
+        "data": { "address": "Device" }
+      },
+      "confirm": {
+        "title": "Confirm",
+        "description": "Add {name}?"
+      }
+    },
+    "abort": {
+      "no_devices_found": "No LEDI device found",
+      "already_configured": "Already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "LEDI Configuration",
+        "data": {
+          "preset_mix_gear": "Mix Gear",
+          "preset_green_gear": "Green Gear",
+          "preset_red_gear": "Red Gear",
+          "timer1_enable": "Timer 1 Enable",
+          "timer1_start": "Timer 1 Start",
+          "timer1_end": "Timer 1 End",
+          "timer1_open_dur": "Timer 1 Sunrise",
+          "timer1_close_dur": "Timer 1 Sunset",
+          "timer2_enable": "Timer 2 Enable",
+          "timer2_start": "Timer 2 Start",
+          "timer2_end": "Timer 2 End",
+          "timer2_open_dur": "Timer 2 Sunrise",
+          "timer2_close_dur": "Timer 2 Sunset"
+        }
+      }
+    },
+    "error": {
+      "invalid_time": "Invalid time format, expected HH:MM"
+    }
+  },
+  "entity": {
+    "switch": { "main_power": { "name": "Main Power" } },
+    "select": { "profile": { "name": "Spectrum Preset" } },
+    "number": {
+      "channel_r": { "name": "Red" },
+      "channel_g": { "name": "Green" },
+      "channel_b": { "name": "Blue" },
+      "channel_w": { "name": "White" },
+      "channel_uv": { "name": "UV" },
+      "fan_temp_threshold": { "name": "Fan Temperature Threshold" }
+    },
+    "fan": { "fan": { "name": "Fan" } },
+    "sensor": { "est_power": { "name": "Estimated Power" } },
+    "button": {
+      "save_slot": { "name": "Save to Slot" },
+      "revert": { "name": "Reset Light" }
+    }
+  }
+}

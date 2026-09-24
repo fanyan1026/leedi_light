@@ -1,0 +1,84 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "选择设备",
+        "data": { "address": "设备" }
+      },
+      "confirm": {
+        "title": "确认添加",
+        "description": "确认添加 {name}？"
+      }
+    },
+    "abort": {
+      "no_devices_found": "未找到 LEDI 设备",
+      "already_configured": "该设备已配置"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "LEDI 灯配置",
+        "data": {
+          "preset_mix_gear": "混合光源功率",
+          "preset_green_gear": "青翠光源功率",
+          "preset_red_gear": "胭红光源功率",
+          "timer1_enable": "定时器 1 启用",
+          "timer1_start": "定时器 1 开始时间",
+          "timer1_end": "定时器 1 结束时间",
+          "timer1_open_dur": "定时器 1 日出时长",
+          "timer1_close_dur": "定时器 1 日落时长",
+          "timer2_enable": "定时器 2 启用",
+          "timer2_start": "定时器 2 开始时间",
+          "timer2_end": "定时器 2 结束时间",
+          "timer2_open_dur": "定时器 2 日出时长",
+          "timer2_close_dur": "定时器 2 日落时长"
+        },
+        "data_description": {
+          "preset_mix_gear": "切到混合光源时使用的亮度百分比",
+          "preset_green_gear": "切到青翠光源时使用的亮度百分比",
+          "preset_red_gear": "切到胭红光源时使用的亮度百分比",
+          "timer1_enable": "打开后设备固件按下面时间自动开关灯",
+          "timer1_start": "格式 HH:MM，例如 08:00",
+          "timer1_end": "格式 HH:MM，例如 21:00",
+          "timer1_open_dur": "0-60 分钟，0 表示瞬间全亮",
+          "timer1_close_dur": "0-60 分钟，0 表示瞬间熄灭",
+          "timer2_enable": "第二个独立定时器",
+          "timer2_start": "格式 HH:MM，不用时留空",
+          "timer2_end": "格式 HH:MM，不用时留空",
+          "timer2_open_dur": "0-60 分钟",
+          "timer2_close_dur": "0-60 分钟"
+        }
+      }
+    },
+    "error": {
+      "invalid_time": "时间格式无效，应为 HH:MM"
+    }
+  },
+  "entity": {
+    "switch": {
+      "main_power": { "name": "总电源" }
+    },
+    "select": {
+      "profile": { "name": "光谱预设" }
+    },
+    "number": {
+      "channel_r": { "name": "红光" },
+      "channel_g": { "name": "绿光" },
+      "channel_b": { "name": "蓝光" },
+      "channel_w": { "name": "白光" },
+      "channel_uv": { "name": "UV" },
+      "fan_temp_threshold": { "name": "风扇自动温度阈值" }
+    },
+    "fan": {
+      "fan": { "name": "风扇" }
+    },
+    "sensor": {
+      "est_power": { "name": "估算输出功率" }
+    },
+    "button": {
+      "save_slot": { "name": "保存到自定义槽" },
+      "revert": { "name": "重设光源" }
+    }
+  }
+}

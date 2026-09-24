@@ -1,0 +1,15 @@
+{
+  "domain": "leedi_light",
+  "name": "LEDI",
+  "version": "0.10.0",
+  "documentation": "https://github.com/fanyan1026/leedi_light",
+  "issue_tracker": "https://github.com/fanyan1026/leedi_light/issues",
+  "codeowners": ["@fanyan1026"],
+  "dependencies": ["bluetooth"],
+  "requirements": ["bleak-retry-connector"],
+  "bluetooth": [{"local_name": "X-G-*"}],
+  "iot_class": "local_polling",
+  "config_flow": true
+}
+
+
