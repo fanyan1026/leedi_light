@@ -20,7 +20,7 @@ Home Assistant 自定义集成：本地 BLE 控制 LEDI AT5 80W 水族/植物灯
 
 1. 打开 **HACS** → **集成**
 2. 点击右上角 **⋮** → **自定义存储库**
-3. 粘贴：`https://github.com/你的用户名/leedi_light`
+3. 粘贴：`https://github.com/fanyan1026/leedi_light`
 4. Category 选 **Integration** → 点击 **添加**
 5. 在 HACS 里搜索 **LEDI** → **Download**
 6. **重启 Home Assistant**
