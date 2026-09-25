@@ -3,9 +3,11 @@ import logging
 import time
 from datetime import datetime
 from typing import Callable, Dict, Any, List, Optional
+
 from bleak import BleakClient, BleakError
 from bleak_retry_connector import establish_connection
 from homeassistant.components import bluetooth
+
 from .protocol import parse_notify, build_command
 from .const import (
     CHAR_UUID,
@@ -18,29 +20,42 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
 CONNECT_TIMEOUT = 10
 COMMAND_TIMEOUT = 5
 LOCK_WAIT_TIMEOUT = 6
-SEND_RETRIES = 2               # 下发失败重试次数
-POLL_INTERVAL = 600            # 每 10 分钟轮询一次
-IDLE_TIMEOUT = 60              # 用户操作后 60 秒无动作 → 断开
-IDLE_CHECK_INTERVAL = 30       # 每 30 秒检查一次空闲
+SEND_RETRIES = 2
+
+POLL_INTERVAL = 600
+IDLE_TIMEOUT = 60
+IDLE_CHECK_INTERVAL = 30
+
+POLL_RETRIES = 3
+POLL_RETRY_DELAY = 5
+STARTUP_RETRIES = 5
+STARTUP_RETRY_DELAY = 5
+RECONNECT_RETRIES = 3
+RECONNECT_DELAY = 2
 
 
 class LeediBleClient:
-    """乐迪灯 BLE 客户端。"""
     def __init__(self, hass, address: str):
         self.hass = hass
         self._address = address
         self._client: Optional[BleakClient] = None
         self._connected = False
-        self._notify_callbacks: List[Callable[[Dict[str, Any]], None]] = []
-        self._disconnect_callbacks: List[Callable[[], None]] = []
-        self._connect_callbacks: List[Callable[[], None]] = []
+
+        self._notify_callbacks: List[Callable] = []
+        self._disconnect_callbacks: List[Callable] = []
+        self._connect_callbacks: List[Callable] = []
+
         self._lock = asyncio.Lock()
         self._connect_lock = asyncio.Lock()
+
         self._closing = False
         self._closing_connection = False
+        self._expected_disconnect = False
+        self._reconnecting = False
         self._poll_task: Optional[asyncio.Task] = None
         self._idle_task: Optional[asyncio.Task] = None
         self._last_user_activity = 0.0
@@ -102,7 +117,6 @@ class LeediBleClient:
 
     # ---------------- 后台循环 ----------------
     async def _poll_loop(self):
-        """10 分钟周期轮询。首次 poll 由 poll_now 触发。"""
         while not self._closing:
             try:
                 await asyncio.sleep(POLL_INTERVAL)
@@ -131,31 +145,62 @@ class LeediBleClient:
             except Exception:
                 _LOGGER.debug("空闲检查异常", exc_info=True)
 
+    # ---------------- 启动首次查询 ----------------
     async def poll_now(self):
-        """启动时调用：等 HA 就绪后再 poll。"""
         await asyncio.sleep(3)
         if self._closing:
             return
-        try:
-            await self._poll_once()
-            _LOGGER.info("启动状态刷新完成")
-        except Exception as e:
-            _LOGGER.warning("启动状态刷新失败: %s", e)
 
+        for attempt in range(STARTUP_RETRIES):
+            if self._closing:
+                return
+            try:
+                ok = await self.connect()
+                if ok:
+                    self._last_user_activity = time.time()
+                    try:
+                        await self.send_command_no_reconnect(CMD_GET_STATUS)
+                        await asyncio.sleep(0.5)
+                    except Exception:
+                        pass
+                    _LOGGER.info("启动状态刷新完成（第 %d 次尝试）", attempt + 1)
+                    return
+            except Exception as e:
+                _LOGGER.debug("启动尝试 %d 失败: %s", attempt + 1, e)
+
+            if attempt < STARTUP_RETRIES - 1:
+                await asyncio.sleep(STARTUP_RETRY_DELAY)
+
+        _LOGGER.warning("启动状态刷新失败（%d 次重试后）", STARTUP_RETRIES)
+        self._notify_disconnect()
+
+    # ---------------- 10 分钟轮询 ----------------
     async def _poll_once(self):
         if self._closing:
             return
-        try:
-            ok = await self.connect()
-            if not ok:
-                self._notify_disconnect()
+        # ★ 重连任务进行中 → 跳过（避免并发连接尝试）
+        if self._reconnecting:
+            _LOGGER.debug("重连任务进行中，跳过轮询")
+            return
+
+        for attempt in range(POLL_RETRIES):
+            if self._closing:
                 return
-            self._last_user_activity = time.time()
-            await self.send_command_no_reconnect(CMD_GET_STATUS)
-            await asyncio.sleep(0.5)
-        except Exception as e:
-            _LOGGER.debug("轮询失败: %s", e)
-            self._notify_disconnect()
+            try:
+                ok = await self.connect()
+                if ok:
+                    self._last_user_activity = time.time()
+                    await self.send_command_no_reconnect(CMD_GET_STATUS)
+                    await asyncio.sleep(0.5)
+                    return
+            except Exception as e:
+                _LOGGER.debug("轮询尝试 %d 失败: %s", attempt + 1, e)
+
+            if attempt < POLL_RETRIES - 1:
+                await asyncio.sleep(POLL_RETRY_DELAY)
+
+        _LOGGER.warning("轮询失败（%d 次重试后）", POLL_RETRIES)
+        self._notify_disconnect()
 
     def _notify_disconnect(self):
         for cb in list(self._disconnect_callbacks):
@@ -166,23 +211,59 @@ class LeediBleClient:
 
     # ---------------- 底层事件 ----------------
     def _on_disconnect(self, _client):
-        if self._closing_connection:
+        if self._client is not _client:
+            _LOGGER.debug("忽略旧 client 的断开回调")
             return
-        _LOGGER.info("乐迪灯 %s 蓝牙意外断开", self._address)
+        if self._expected_disconnect or self._closing_connection:
+            _LOGGER.debug("预期断开，不变灰")
+            return
+
+        _LOGGER.info("乐迪灯 %s 蓝牙意外断开，尝试重连...", self._address)
         self._connected = False
         self._client = None
-        self._notify_disconnect()
+
+        if not self._closing:
+            asyncio.create_task(self._auto_reconnect())
+
+    async def _auto_reconnect(self):
+        # ★ 防并发：已有重连任务则跳过
+        if self._reconnecting:
+            _LOGGER.debug("重连任务已在进行中，跳过")
+            return
+        self._reconnecting = True
+        try:
+            for attempt in range(RECONNECT_RETRIES):
+                await asyncio.sleep(RECONNECT_DELAY)
+                if self._closing:
+                    return
+                if self.is_connected:
+                    _LOGGER.debug("已被其它任务重连，跳过")
+                    return
+                try:
+                    if await self.connect():
+                        _LOGGER.info("意外断开后重连成功（第 %d 次）", attempt + 1)
+                        self._last_user_activity = time.time()
+                        try:
+                            await self.send_command_no_reconnect(CMD_GET_STATUS)
+                        except Exception:
+                            pass
+                        return
+                except Exception as e:
+                    _LOGGER.debug("重连尝试 %d 失败: %s", attempt + 1, e)
+
+            _LOGGER.warning("意外断开后重连失败（%d 次）", RECONNECT_RETRIES)
+            self._notify_disconnect()
+        finally:
+            self._reconnecting = False
 
     def _notification_handler(self, sender, data: bytes):
         hex_str = bytes(data).hex().upper()
         parsed = parse_notify(hex_str)
         if not parsed:
             return
-        # 收到status上报，刷新空闲计时器，风扇自动启停不会被空闲断开
         if parsed.get("type") == "status":
             self._last_user_activity = time.time()
-
-        if parsed.get("type") != "status":
+        else:
             _LOGGER.debug("乐迪灯通知: %s", hex_str)
         for cb in list(self._notify_callbacks):
             try:
@@ -210,11 +291,14 @@ class LeediBleClient:
             return False
 
     async def _connect_inner(self) -> bool:
+        self._expected_disconnect = False
+
         device = bluetooth.async_ble_device_from_address(
             self.hass, self._address, connectable=True
         )
         if device is None:
             raise RuntimeError(f"找不到设备 {self._address}")
+
         self._client = await establish_connection(
             BleakClient,
             device,
@@ -225,6 +309,7 @@ class LeediBleClient:
         await self._client.start_notify(CHAR_UUID, self._notification_handler)
         self._connected = True
         _LOGGER.info("乐迪灯 %s 已连接", self._address)
+
         await asyncio.sleep(0.2)
         try:
             now = datetime.now()
@@ -235,6 +320,7 @@ class LeediBleClient:
             await self.send_command_no_reconnect(CMD_GET_STATUS)
         except Exception:
             _LOGGER.debug("初始查询状态失败", exc_info=True)
+
         for cb in list(self._connect_callbacks):
             try:
                 cb()
@@ -243,6 +329,7 @@ class LeediBleClient:
         return True
 
     async def disconnect(self):
+        self._expected_disconnect = True
         self._closing_connection = True
         try:
             if self._client:
@@ -274,7 +361,6 @@ class LeediBleClient:
             raise ConnectionError(f"写入BLE失败: {e}") from e
 
     async def send_command(self, cmd: int, data: bytes = b"", retries: int = SEND_RETRIES):
-        """用户操作：连接 → 下发。失败自动重试 retries 次。"""
         self._last_user_activity = time.time()
         last_err = None
         for attempt in range(retries + 1):

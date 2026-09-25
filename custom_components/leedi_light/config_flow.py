@@ -28,7 +28,6 @@ def _validate_hhmm(s: str) -> bool:
 def _build_options_schema(options: dict) -> vol.Schema:
     fields = {}
 
-    # ---------- 3 个预设的独立功率 ----------
     for key, default in (
         ("preset_mix_gear", 100),
         ("preset_green_gear", 100),
@@ -40,15 +39,14 @@ def _build_options_schema(options: dict) -> vol.Schema:
                 mode=selector.NumberSelectorMode.SLIDER,
             ))
 
-    # ---------- 定时器 1 ----------
     fields[vol.Optional("timer1_enable",
                         default=options.get("timer1_enable", False))] = \
         selector.BooleanSelector()
     fields[vol.Optional("timer1_start",
-                        default=options.get("timer1_start", "08:00"))] = \
+                        default=options.get("timer1_start", ""))] = \
         selector.TextSelector()
     fields[vol.Optional("timer1_end",
-                        default=options.get("timer1_end", "21:00"))] = \
+                        default=options.get("timer1_end", ""))] = \
         selector.TextSelector()
     for key, default in (("timer1_open_dur", 20), ("timer1_close_dur", 20)):
         fields[vol.Optional(key, default=options.get(key, default))] = \
@@ -57,7 +55,6 @@ def _build_options_schema(options: dict) -> vol.Schema:
                 mode=selector.NumberSelectorMode.SLIDER,
             ))
 
-    # ---------- 定时器 2 ----------
     fields[vol.Optional("timer2_enable",
                         default=options.get("timer2_enable", False))] = \
         selector.BooleanSelector()
@@ -134,19 +131,22 @@ class LeediOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input=None):
         errors = {}
-
         if user_input is not None:
             for slot in (1, 2):
                 for key in (f"timer{slot}_start", f"timer{slot}_end"):
                     t = (user_input.get(key) or "").strip()
                     if t and not _validate_hhmm(t):
                         errors[key] = "invalid_time"
-
             if not errors:
                 return self.async_create_entry(title="", data=user_input)
 
+        # ★ 关键修复：报错重显时，优先用 user_input 保留用户输入
+        form_data = dict(self._entry.options)
+        if user_input is not None:
+            form_data.update(user_input)
+
         return self.async_show_form(
             step_id="init",
-            data_schema=_build_options_schema(dict(self._entry.options)),
+            data_schema=_build_options_schema(form_data),
             errors=errors,
         )

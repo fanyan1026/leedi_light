@@ -51,7 +51,13 @@ class LeediFan(FanEntity, RestoreEntity):
             pm = last.attributes.get("preset_mode")
             if pm in PRESET_MODES:
                 self._preset_mode = pm
-        # temp_threshold 交给number实体restore，此处不再读取
+            # ★ fan 自己 restore temp_threshold（跟 number 各存一份，值一致）
+            t = last.attributes.get("temp_threshold")
+            if isinstance(t, (int, float)):
+                self._temp_threshold = int(t)
+
+        # ★ 尝试从 number 同步（可能已加载），若未加载保留自己恢复的值
+        self._temp_threshold = self._get_temp_from_number(fallback=self._temp_threshold)
 
     async def async_will_remove_from_hass(self):
         self._client.remove_notify_callback(self._handle_notify)
@@ -68,7 +74,6 @@ class LeediFan(FanEntity, RestoreEntity):
         gear = data.get("fan_gear")
         if gear is not None:
             self._real_gear = gear
-        # fan_gear仅展示，不修改 _is_on / preset / temp_threshold
         self.async_write_ha_state()
 
     @property
@@ -79,9 +84,24 @@ class LeediFan(FanEntity, RestoreEntity):
     def preset_mode(self) -> str | None:
         return self._preset_mode
 
+    def _get_temp_from_number(self, fallback=None):
+        """从 number 实体读 temp_threshold（若已加载）。"""
+        if fallback is None:
+            fallback = self._temp_threshold
+        num_ent = self.hass.data[DOMAIN].get(
+            f"{self._entry.entry_id}_fan_temp_num"
+        )
+        if num_ent is not None:
+            try:
+                return int(num_ent._attr_native_value)
+            except Exception:
+                pass
+        return fallback
+
     @property
     def extra_state_attributes(self) -> dict[str, StateType]:
-        attrs = {}
+        # 用 number 的值（若已加载），否则自己的
+        attrs = {"temp_threshold": self._get_temp_from_number()}
         if self._real_gear is not None:
             attrs["real_running_gear"] = self._real_gear
         return attrs
@@ -93,10 +113,10 @@ class LeediFan(FanEntity, RestoreEntity):
         self._preset_mode = preset_mode
         gear = {PRESET_LOW: 1, PRESET_HIGH: 2}[preset_mode]
 
-        # 只有温控开启才下发；关闭仅更新内存
         if self._is_on:
             try:
-                await self._client.set_fan(self._temp_threshold, gear)
+                temp = self._get_temp_from_number()
+                await self._client.set_fan(temp, gear)
                 self._attr_available = True
             except Exception as e:
                 _LOGGER.warning("设置风扇预设失败: %s", e)
@@ -111,7 +131,8 @@ class LeediFan(FanEntity, RestoreEntity):
         old_is_on = self._is_on
         self._is_on = True
         try:
-            await self._client.set_fan(self._temp_threshold, target_gear)
+            temp = self._get_temp_from_number()
+            await self._client.set_fan(temp, target_gear)
             self._attr_available = True
         except Exception as e:
             _LOGGER.warning("开启风扇温控失败: %s", e)
@@ -123,7 +144,8 @@ class LeediFan(FanEntity, RestoreEntity):
         old_is_on = self._is_on
         self._is_on = False
         try:
-            await self._client.set_fan(self._temp_threshold, 0)
+            temp = self._get_temp_from_number()
+            await self._client.set_fan(temp, 0)
             self._attr_available = True
         except Exception as e:
             _LOGGER.warning("关闭风扇失败: %s", e)

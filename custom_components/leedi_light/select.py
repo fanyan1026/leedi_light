@@ -74,7 +74,6 @@ class LeediProfileSelect(SelectEntity, RestoreEntity):
     async def async_will_remove_from_hass(self):
         self._client.remove_notify_callback(self._handle_notify)
 
-    # ---------- 从 options 读值 ----------
     def _get_configured_gear(self, option: str) -> float:
         key = KEY_MAP.get(option)
         opt_key = GEAR_KEY_MAP.get(key)
@@ -128,7 +127,6 @@ class LeediProfileSelect(SelectEntity, RestoreEntity):
             ent._attr_native_value = self._state.get(ent._ch_key, 0)
             ent.async_write_ha_state()
 
-    # ---------- 下发 ----------
     async def _apply_and_send(self):
         self._recompute_state()
         r = self._state["r"]
@@ -146,59 +144,51 @@ class LeediProfileSelect(SelectEntity, RestoreEntity):
         self._refresh_channels()
         self.async_write_ha_state()
 
-    # ---------- notify 回调 ----------
     def _handle_notify(self, data: dict):
         if data.get("type") != "status":
             return
         self._attr_available = True
 
-        # 命令后 2 秒内不覆盖（防闪回）
-        if time.time() - self._last_cmd_time < CMD_COOLDOWN:
+        # ★ 检查自己 + 所有通道滑块的冷却
+        now = time.time()
+        in_cooldown = (now - self._last_cmd_time) < CMD_COOLDOWN
+        if not in_cooldown:
+            for ent in self.hass.data[DOMAIN].get(
+                f"{self._entry.entry_id}_channel_entities", []
+            ):
+                if (now - ent._last_cmd_time) < CMD_COOLDOWN:
+                    in_cooldown = True
+                    break
+
+        if in_cooldown:
             self.async_write_ha_state()
             return
 
-        # 灯关 → 保留本地值（记忆配置）
         if not self._is_light_on():
             self._refresh_channels()
             self.async_write_ha_state()
             return
 
-        # 灯开 → 跟设备真实值（RGBW）
+        # 灯开 → RGBW 跟设备，UV 不重算（保留本地值）
         for k in ("r", "g", "b", "w"):
             self._state[k] = data.get(k, 0)
-
-        # UV 设备不上报 → 保留本地值
-        base = self._get_current_base()
-        if self._attr_current_option in CUSTOM_NAMES:
-            scale = 1.0
-        else:
-            scale = self._temp_power / 100.0
-        self._state["uv"] = js_round(base["uv"] * scale)
-
         self._state["is_on"] = True
+
         self._refresh_channels()
         self.async_write_ha_state()
 
-    # ---------- options 变更回调 ----------
     async def async_reload_from_options(self):
         old_state = dict(self._state)
-
         if self._attr_current_option not in CUSTOM_NAMES:
             self._temp_power = self._get_configured_gear(self._attr_current_option)
-
         self._recompute_state()
-
-        changed = any(
-            old_state.get(k) != self._state.get(k) for k in CH_KEYS
-        )
-
+        changed = any(old_state.get(k) != self._state.get(k) for k in CH_KEYS)
         if changed and self._is_light_on():
             await self._apply_and_send()
         else:
             self._refresh_channels()
             self.async_write_ha_state()
 
-    # ---------- 给 button 用 ----------
     def get_slot_index(self) -> int:
         if self._attr_current_option not in CUSTOM_NAMES:
             return -1
@@ -225,7 +215,6 @@ class LeediProfileSelect(SelectEntity, RestoreEntity):
             self._refresh_channels()
             self.async_write_ha_state()
 
-    # ---------- 切模式 ----------
     async def async_select_option(self, option: str) -> None:
         self._attr_current_option = option
         if option in CUSTOM_NAMES:
@@ -233,9 +222,7 @@ class LeediProfileSelect(SelectEntity, RestoreEntity):
             self._temp_power = 100.0
         else:
             self._temp_power = self._get_configured_gear(option)
-
         self._recompute_state()
-
         if self._is_light_on():
             await self._apply_and_send()
         else:
